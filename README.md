@@ -34,5 +34,5 @@ Feel free to open issues or submit pull requests to improve the site.
 
 ---
 
-© 2025 Lim Jun Xian
+© 2025 Syzygetic
 
