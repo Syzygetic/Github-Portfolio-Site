@@ -1,6 +1,4 @@
 # Github-Portfolio-Site
-# Github-Portfolio-Site
-This is an experimental site hosted on GitHub to showcase my portfolio and explore new concepts/ideas.
 
 This project explores using GitHub Pages to host my personal portfolio website and to explore interesting web development concepts/ideas. Currently the website includes:
 
