@@ -41,7 +41,6 @@
     td.highlight {
       background-color: #d7ecff;
     }
-    /* Thicker borders for 3x3 blocks */
     td.border-bottom {
       border-bottom: 3px solid #333;
     }
@@ -62,16 +61,10 @@
   </style>
 </head>
 <body>
-  <!-- Navbar -->
   <nav class="navbar navbar-expand-lg">
     <div class="container-fluid">
       <a class="navbar-brand fw-bold" href="#">MySite</a>
-      <button
-        class="navbar-toggler"
-        type="button"
-        data-bs-toggle="collapse"
-        data-bs-target="#navbarNav"
-      >
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
         <span class="navbar-toggler-icon"></span>
       </button>
       <div class="collapse navbar-collapse" id="navbarNav">
@@ -107,63 +100,86 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-
   <script>
-    // Predefined puzzles for simplicity (0 = empty cell)
-    const puzzles = {
-      easy: [
-        [5,3,0, 0,7,0, 0,0,0],
-        [6,0,0, 1,9,5, 0,0,0],
-        [0,9,8, 0,0,0, 0,6,0],
-
-        [8,0,0, 0,6,0, 0,0,3],
-        [4,0,0, 8,0,3, 0,0,1],
-        [7,0,0, 0,2,0, 0,0,6],
-
-        [0,6,0, 0,0,0, 2,8,0],
-        [0,0,0, 4,1,9, 0,0,5],
-        [0,0,0, 0,8,0, 0,7,9]
-      ],
-      medium: [
-        [0,2,0, 6,0,8, 0,0,0],
-        [5,8,0, 0,0,9, 7,0,0],
-        [0,0,0, 0,4,0, 0,0,0],
-
-        [3,7,0, 0,0,0, 5,0,0],
-        [6,0,0, 0,0,0, 0,0,4],
-        [0,0,8, 0,0,0, 0,1,3],
-
-        [0,0,0, 0,2,0, 0,0,0],
-        [0,0,9, 8,0,0, 0,3,6],
-        [0,0,0, 3,0,6, 0,9,0]
-      ],
-      hard: [
-        [0,0,0, 0,0,0, 0,0,1],
-        [3,0,0, 0,0,5, 0,0,0],
-        [0,0,0, 1,0,0, 0,0,0],
-
-        [0,0,0, 0,6,0, 0,0,0],
-        [0,0,0, 3,0,0, 0,0,5],
-        [0,0,0, 0,0,0, 0,7,0],
-
-        [0,0,0, 0,0,0, 0,0,0],
-        [0,0,1, 0,0,0, 6,0,0],
-        [0,0,0, 0,0,0, 4,0,0]
-      ]
-    };
-
     let currentPuzzle = [];
     let solutionGrid = [];
     const grid = document.getElementById('sudoku-grid');
     const difficultySelect = document.getElementById('difficulty');
     const message = document.getElementById('message');
 
-    // Utility: Deep copy 2D array
     function deepCopy(arr) {
       return arr.map(row => row.slice());
     }
 
-    // Fill the sudoku grid table
+    function generateFullSolution() {
+      const board = Array.from({ length: 9 }, () => Array(9).fill(0));
+
+      function isValid(r, c, n) {
+        for (let i = 0; i < 9; i++) {
+          if (board[r][i] === n || board[i][c] === n) return false;
+          const boxRow = 3 * Math.floor(r / 3) + Math.floor(i / 3);
+          const boxCol = 3 * Math.floor(c / 3) + (i % 3);
+          if (board[boxRow][boxCol] === n) return false;
+        }
+        return true;
+      }
+
+      function shuffle(arr) {
+        for (let i = arr.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+      }
+
+      function fill(r = 0, c = 0) {
+        if (r === 9) return true;
+        const nextR = c === 8 ? r + 1 : r;
+        const nextC = c === 8 ? 0 : c + 1;
+        const nums = shuffle([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+        for (const num of nums) {
+          if (isValid(r, c, num)) {
+            board[r][c] = num;
+            if (fill(nextR, nextC)) return true;
+            board[r][c] = 0;
+          }
+        }
+        return false;
+      }
+
+      fill();
+      return board;
+    }
+
+    function removeCells(board, difficulty) {
+      const puzzle = deepCopy(board);
+      let cellsToRemove;
+
+      switch (difficulty) {
+        case 'easy':
+          cellsToRemove = 35;
+          break;
+        case 'medium':
+          cellsToRemove = 45;
+          break;
+        case 'hard':
+          cellsToRemove = 55;
+          break;
+      }
+
+      while (cellsToRemove > 0) {
+        const r = Math.floor(Math.random() * 9);
+        const c = Math.floor(Math.random() * 9);
+        if (puzzle[r][c] !== 0) {
+          puzzle[r][c] = 0;
+          cellsToRemove--;
+        }
+      }
+
+      return puzzle;
+    }
+
     function fillGrid(puzzle) {
       grid.innerHTML = '';
       for (let r = 0; r < 9; r++) {
@@ -173,7 +189,6 @@
           cell.setAttribute('data-row', r);
           cell.setAttribute('data-col', c);
 
-          // Add thicker borders for 3x3 blocks
           if (r === 2 || r === 5) cell.classList.add('border-bottom');
           if (c === 2 || c === 5) cell.classList.add('border-right');
 
@@ -193,7 +208,6 @@
       }
     }
 
-    // Input handler to allow only digits 1-9 and single char
     function onInput(e) {
       let val = e.target.textContent;
       if (val.length > 1) {
@@ -206,9 +220,7 @@
       }
     }
 
-    // Prevent invalid keys (optional)
     function onKeyDown(e) {
-      // Allow navigation keys, backspace, delete, numbers only
       if (
         !(
           e.key >= '1' && e.key <= '9' ||
@@ -225,7 +237,6 @@
       }
     }
 
-    // Get user inputs from grid as 2D array
     function getUserGrid() {
       const userGrid = [];
       for (let r = 0; r < 9; r++) {
@@ -240,7 +251,6 @@
       return userGrid;
     }
 
-    // Check if user solution is correct by comparing to solution
     function checkSolution() {
       const userGrid = getUserGrid();
       for (let r = 0; r < 9; r++) {
@@ -251,53 +261,9 @@
       return true;
     }
 
-    // For simplicity, we use a known solver solution for puzzles hardcoded here:
-    // (In production, you could integrate a solver algorithm or use external libs)
-    const solutions = {
-      easy: [
-        [5,3,4,6,7,8,9,1,2],
-        [6,7,2,1,9,5,3,4,8],
-        [1,9,8,3,4,2,5,6,7],
-
-        [8,5,9,7,6,1,4,2,3],
-        [4,2,6,8,5,3,7,9,1],
-        [7,1,3,9,2,4,8,5,6],
-
-        [9,6,1,5,3,7,2,8,4],
-        [2,8,7,4,1,9,6,3,5],
-        [3,4,5,2,8,6,1,7,9]
-      ],
-      medium: [
-        [1,2,7,6,3,8,9,5,4],
-        [5,8,3,7,1,9,2,6,1],
-        [9,6,4,2,4,5,3,7,8],
-
-        [3,7,1,9,8,6,5,4,2],
-        [6,9,5,1,7,2,8,3,4],
-        [4,5,8,3,9,7,1,1,3],
-
-        [7,1,6,4,2,3,7,8,9],
-        [2,4,9,8,5,1,6,3,6],
-        [8,3,5,3,6,4,4,9,7]
-      ],
-      hard: [
-        [8,5,7,9,3,6,2,4,1],
-        [3,9,1,2,7,5,8,6,7],
-        [4,6,2,1,8,4,9,3,5],
-
-        [9,8,4,7,6,3,1,5,2],
-        [1,2,6,3,5,9,4,7,5],
-        [7,3,5,4,1,8,6,7,9],
-
-        [2,1,9,6,4,7,3,8,4],
-        [5,4,1,8,9,2,6,1,3],
-        [6,7,3,5,2,1,4,9,8]
-      ]
-    };
-
     function loadPuzzle(difficulty) {
-      currentPuzzle = deepCopy(puzzles[difficulty]);
-      solutionGrid = deepCopy(solutions[difficulty]);
+      solutionGrid = generateFullSolution();
+      currentPuzzle = removeCells(solutionGrid, difficulty);
       fillGrid(currentPuzzle);
       message.textContent = '';
     }
@@ -320,7 +286,7 @@
       loadPuzzle(difficultySelect.value);
     });
 
-    // Initialize default puzzle
+    // Load default puzzle on start
     loadPuzzle(difficultySelect.value);
   </script>
 </body>
