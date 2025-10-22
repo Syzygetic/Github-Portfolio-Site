@@ -42,54 +42,48 @@
     </div>
   </div>
 
-  <!-- Load FFmpeg UMD version -->
+  <!-- Load your self-hosted UMD build -->
   <script src="./assets/ffmpeg/umd/ffmpeg.js"></script>
   <script>
+    // Extract createFFmpeg & fetchFile from the global FFmpegWASM
+    const { createFFmpeg, fetchFile } = FFmpegWASM;
+
     const videoInput = document.getElementById('videoInput');
     const encodeBtn = document.getElementById('encodeBtn');
     const previewArea = document.getElementById('previewArea');
     const frameCanvas = document.getElementById('frameCanvas');
     const ctx = frameCanvas.getContext('2d');
 
-    // Use UMD global FFmpeg
-    const { createFFmpeg, fetchFile } = FFmpeg;
-
     const ffmpeg = createFFmpeg({
       log: true,
       corePath: './assets/ffmpeg/ffmpeg-core.wasm',
-      workerPath: './assets/ffmpeg/esm/worker.js'  // Updated path here
+      workerPath: './assets/ffmpeg/esm/worker.js'
     });
 
     async function loadFFmpeg() {
-      try {
-        if (!ffmpeg.isLoaded()) {
-          console.log('Loading FFmpeg...');
-          await ffmpeg.load();
-          console.log('FFmpeg loaded');
-        }
-      } catch(e) {
-        console.error('FFmpeg load failed:', e);
+      if (!ffmpeg.isLoaded()) {
+        console.log('Loading FFmpeg...');
+        await ffmpeg.load();
+        console.log('FFmpeg loaded');
       }
     }
 
     async function generatePreview(file) {
       try {
         await loadFFmpeg();
-        console.log('Writing video file to FFmpeg FS...');
-        ffmpeg.FS('writeFile', 'input.mp4', await fetchFile(file));
+        const data = await fetchFile(file);
+        ffmpeg.FS('writeFile', 'input.mp4', data);
 
-        console.log('Extracting first frame...');
         await ffmpeg.run('-i', 'input.mp4', '-ss', '00:00:00', '-frames:v', '1', 'preview.png');
 
-        const data = ffmpeg.FS('readFile', 'preview.png');
-        const blob = new Blob([data.buffer], { type: 'image/png' });
+        const previewData = ffmpeg.FS('readFile', 'preview.png');
+        const blob = new Blob([previewData.buffer], { type: 'image/png' });
         const img = new Image();
         img.onload = function() {
           frameCanvas.width = img.width;
           frameCanvas.height = img.height;
           ctx.drawImage(img, 0, 0);
           previewArea.style.display = 'block';
-          console.log('Preview frame displayed');
         };
         img.src = URL.createObjectURL(blob);
       } catch(e) {
