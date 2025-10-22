@@ -42,19 +42,19 @@
     </div>
   </div>
 
-  <script type="module">
-    import { createFFmpeg, fetchFile } from './assets/ffmpeg/index.js';
-
+  <!-- Include UMD version of FFmpeg -->
+  <script src="./assets/ffmpeg/ffmpeg.js"></script>
+  <script>
     const videoInput = document.getElementById('videoInput');
     const encodeBtn = document.getElementById('encodeBtn');
     const previewArea = document.getElementById('previewArea');
     const frameCanvas = document.getElementById('frameCanvas');
     const ctx = frameCanvas.getContext('2d');
 
-    const ffmpeg = createFFmpeg({
+    const ffmpeg = FFmpeg.createFFmpeg({
       log: true,
-      workerPath: './assets/ffmpeg/worker.js',
-      corePath: './assets/ffmpeg/ffmpeg-core.wasm'
+      corePath: './assets/ffmpeg/ffmpeg-core.wasm',
+      workerPath: './assets/ffmpeg/worker.js'
     });
 
     async function loadFFmpeg() {
@@ -72,10 +72,8 @@
     async function generatePreview(file) {
       try {
         await loadFFmpeg();
-        console.log('Writing video file to FFmpeg FS');
-        ffmpeg.FS('writeFile', 'input.mp4', await fetchFile(file));
+        ffmpeg.FS('writeFile', 'input.mp4', await fetch(file).then(res => res.arrayBuffer()));
 
-        console.log('Extracting first frame...');
         await ffmpeg.run('-i', 'input.mp4', '-ss', '00:00:00', '-frames:v', '1', 'preview.png');
 
         const data = ffmpeg.FS('readFile', 'preview.png');
@@ -86,7 +84,6 @@
           frameCanvas.height = img.height;
           ctx.drawImage(img, 0, 0);
           previewArea.style.display = 'block';
-          console.log('Preview frame displayed');
         };
         img.src = URL.createObjectURL(blob);
       } catch(e) {
@@ -95,7 +92,6 @@
     }
 
     videoInput.addEventListener('change', async () => {
-      console.log('Video selected:', videoInput.files[0]);
       encodeBtn.disabled = !videoInput.files.length;
       if (videoInput.files.length) {
         await generatePreview(videoInput.files[0]);
