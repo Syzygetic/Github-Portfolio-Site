@@ -36,8 +36,12 @@
       </div>
       <button class="btn btn-primary" id="encodeBtn" disabled>Encode Message</button>
 
-      <div id="progressContainer" class="progress">
-        <div id="progressBar" class="progress-bar" role="progressbar" style="width: 0%;">0%</div>
+      <!-- Progress Bar -->
+      <div id="progressContainer">
+        <div class="progress">
+          <div id="progressBar" class="progress-bar" role="progressbar" style="width: 0%;">0%</div>
+        </div>
+        <div id="statusText" class="mt-2"></div>
       </div>
     </div>
 
@@ -51,14 +55,16 @@
   <script src="./assets/ffmpeg/umd/ffmpeg.js"></script>
   <script>
     const videoInput = document.getElementById('videoInput');
-    const secretMessage = document.getElementById('secretMessage');
     const encodeBtn = document.getElementById('encodeBtn');
+    const secretMessage = document.getElementById('secretMessage');
     const previewArea = document.getElementById('previewArea');
     const frameCanvas = document.getElementById('frameCanvas');
     const ctx = frameCanvas.getContext('2d');
     const progressContainer = document.getElementById('progressContainer');
     const progressBar = document.getElementById('progressBar');
+    const statusText = document.getElementById('statusText');
 
+    // Instantiate FFmpeg
     const ffmpeg = new FFmpegWASM.FFmpeg({
       log: true,
       corePath: './assets/ffmpeg/ffmpeg-core.wasm',
@@ -89,7 +95,7 @@
           frameCanvas.height = img.height;
           ctx.drawImage(img, 0, 0);
           previewArea.style.display = 'block';
-          encodeBtn.disabled = !secretMessage.value.trim();
+          encodeBtn.disabled = false;
         };
         img.src = URL.createObjectURL(blob);
       } catch (e) {
@@ -97,69 +103,76 @@
       }
     }
 
-    async function getVideoInfo() {
-      await ffmpeg.exec([
-        '-i', 'input.mp4',
-        '-hide_banner',
-        '-print_format', 'json',
-        '-show_streams',
-        '-show_format',
-        'ffprobe.json'
-      ]);
-      const data = await ffmpeg.readFile('ffprobe.json');
-      const json = JSON.parse(new TextDecoder().decode(data));
-      const videoStream = json.streams.find(s => s.codec_type === 'video');
-      if (!videoStream) throw new Error("No video stream found");
-
-      const duration = parseFloat(videoStream.duration || json.format.duration || 0);
-      const [num, den] = (videoStream.r_frame_rate || '25/1').split('/').map(Number);
-      const fps = num / den;
-      const totalFrames = Math.round(duration * fps);
-
-      console.log(`Duration: ${duration}s, FPS: ${fps}, Total Frames: ${totalFrames}`);
-      return { duration, fps, totalFrames };
-    }
-
     async function encodeVideo(file, message) {
       try {
         progressContainer.style.display = 'block';
         progressBar.style.width = '0%';
         progressBar.textContent = '0%';
+        statusText.textContent = 'Starting encoding...';
 
-        const { totalFrames } = await getVideoInfo();
+        await loadFFmpeg();
+        const arrayBuffer = await file.arrayBuffer();
+        await ffmpeg.writeFile('input.mp4', new Uint8Array(arrayBuffer));
 
-        // Placeholder: split video into frames and embed message
-        for (let i = 0; i < totalFrames; i++) {
-          // Simulate work (replace with actual frame encoding)
-          await new Promise(r => setTimeout(r, 5));
+        // Get metadata for total frames
+        const ffprobeOutput = await ffmpeg.ffprobe('input.mp4');
+        const videoStream = ffprobeOutput.streams.find(s => s.codec_type === 'video');
+        const totalFrames = videoStream.nb_frames
+          ? parseInt(videoStream.nb_frames)
+          : Math.round(videoStream.avg_frame_rate.split('/')[0] / videoStream.avg_frame_rate.split('/')[1] * videoStream.duration);
 
-          const percent = Math.round((i + 1) / totalFrames * 100);
-          progressBar.style.width = percent + '%';
-          progressBar.textContent = percent + '%';
-        }
+        ffmpeg.on('log', ({ message }) => {
+          const match = message.match(/frame=\s*(\d+)/);
+          if (match) {
+            const frame = parseInt(match[1]);
+            const percent = Math.min(Math.round((frame / totalFrames) * 100), 100);
+            progressBar.style.width = percent + '%';
+            progressBar.textContent = percent + '%';
+            statusText.textContent = `Encoding frame ${frame} / ${totalFrames}`;
+          }
+        });
 
-        alert('Encoding complete! (Simulation)');
-        progressContainer.style.display = 'none';
+        await ffmpeg.exec([
+          '-i', 'input.mp4',
+          '-vf', `drawtext=text='${message}':x=10:y=10:fontsize=24:fontcolor=white`,
+          '-c:v', 'libx264',
+          '-preset', 'fast',
+          'output.mp4'
+        ]);
+
+        const outputData = await ffmpeg.readFile('output.mp4');
+        const blob = new Blob([outputData.buffer], { type: 'video/mp4' });
+        const url = URL.createObjectURL(blob);
+
+        progressBar.style.width = '100%';
+        progressBar.textContent = '100%';
+        statusText.textContent = 'Encoding complete!';
+
+        // Download link
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'encoded_video.mp4';
+        a.textContent = 'Download Encoded Video';
+        statusText.appendChild(document.createElement('br'));
+        statusText.appendChild(a);
+
       } catch (e) {
         console.error('Encoding error:', e);
-        progressContainer.style.display = 'none';
+        statusText.textContent = 'Error during encoding';
       }
     }
 
     videoInput.addEventListener('change', async () => {
-      encodeBtn.disabled = true;
       if (videoInput.files.length) {
         await generatePreview(videoInput.files[0]);
       }
     });
 
-    secretMessage.addEventListener('input', () => {
-      encodeBtn.disabled = !videoInput.files.length || !secretMessage.value.trim();
-    });
-
     encodeBtn.addEventListener('click', async () => {
       if (videoInput.files.length && secretMessage.value.trim()) {
+        encodeBtn.disabled = true;
         await encodeVideo(videoInput.files[0], secretMessage.value.trim());
+        encodeBtn.disabled = false;
       }
     });
   </script>
