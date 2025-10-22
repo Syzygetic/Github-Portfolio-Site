@@ -77,222 +77,321 @@
   <script src="./assets/ffmpeg/umd/ffmpeg.js"></script>
 
   <script>
-document.addEventListener('DOMContentLoaded', () => {
-  const videoInput = document.getElementById('videoInput');
-  const secretMessage = document.getElementById('secretMessage');
-  const bitRangeSelect = document.getElementById('bitRange');
-  const encodeBtn = document.getElementById('encodeBtn');
-  const cancelBtn = document.getElementById('cancelBtn');
-  const capacityInfo = document.getElementById('capacityInfo');
-  const progressContainer = document.getElementById('progressContainer');
-  const progressBar = document.getElementById('progressBar');
-  const statusText = document.getElementById('statusText');
-  const previewArea = document.getElementById('previewArea');
-  const frameCanvas = document.getElementById('frameCanvas');
-  const ctx = frameCanvas.getContext('2d');
+  document.addEventListener('DOMContentLoaded', () => {
+    const videoInput = document.getElementById('videoInput');
+    const secretMessage = document.getElementById('secretMessage');
+    const bitRangeSelect = document.getElementById('bitRange');
+    const encodeBtn = document.getElementById('encodeBtn');
+    const cancelBtn = document.getElementById('cancelBtn');
+    const capacityInfo = document.getElementById('capacityInfo');
+    const progressContainer = document.getElementById('progressContainer');
+    const progressBar = document.getElementById('progressBar');
+    const statusText = document.getElementById('statusText');
+    const previewArea = document.getElementById('previewArea');
+    const frameCanvas = document.getElementById('frameCanvas');
+    const ctx = frameCanvas.getContext('2d');
 
-  const ffmpeg = new FFmpegWASM.FFmpeg({
-    log:true,
-    corePath:'./assets/ffmpeg/ffmpeg-core.wasm',
-    workerPath:'./assets/ffmpeg/esm/worker.js'
-  });
+    // ffmpeg wrapper (matches your ffmpeg.js)
+    const ffmpeg = new FFmpegWASM.FFmpeg({
+      log: true,
+      corePath: './assets/ffmpeg/ffmpeg-core.wasm',
+      workerPath: './assets/ffmpeg/esm/worker.js'
+    });
 
-  let canceled = false;
-  let ffmpegLoaded = false;
+    let canceled = false;
+    let ffmpegLoaded = false;
 
-  cancelBtn.addEventListener('click', () => {
-    canceled = true;
-    statusText.textContent = 'Cancel requested — terminating ffmpeg...';
-    try { ffmpeg.terminate(); } catch(e){ console.warn(e); }
-    cancelBtn.disabled = true;
-  });
+    cancelBtn.addEventListener('click', () => {
+      canceled = true;
+      statusText.textContent = 'Cancel requested — terminating ffmpeg...';
+      try { ffmpeg.terminate(); } catch(e){ console.warn('terminate failed', e); }
+      cancelBtn.disabled = true;
+    });
 
-  async function loadFFmpeg() {
-    if (!ffmpegLoaded) {
-      statusText.textContent = 'Loading FFmpeg-wasm...';
-      await ffmpeg.load();
-      ffmpegLoaded = true;
-      statusText.textContent = 'FFmpeg loaded.';
+    async function loadFFmpeg() {
+      if (!ffmpegLoaded) {
+        statusText.textContent = 'Loading FFmpeg-wasm...';
+        await ffmpeg.load();
+        ffmpegLoaded = true;
+        statusText.textContent = 'FFmpeg loaded.';
+      }
     }
-  }
 
-  function pad(n,d=5){ return String(n).padStart(d,'0'); }
-  function messageToBinary(msg){ return (msg+'=====').split('').map(c=>c.charCodeAt(0).toString(2).padStart(8,'0')).join(''); }
-  function writeBitsToChannel(val,bits,bitRange){
-    if(bits.length<bitRange) bits += '0'.repeat(bitRange-bits.length);
-    const bin = val.toString(2).padStart(8,'0');
-    const newBin = bin.slice(0, 8-bitRange) + bits;
-    return { newVal: parseInt(newBin,2), consumed: bits.length };
-  }
-
-  async function probeVideo(file) {
-    await ffmpeg.writeFile('input.mp4', new Uint8Array(await file.arrayBuffer()));
-    const info = await ffmpeg.ffprobe('input.mp4');
-    let duration = 0, fps = 25;
-    const dm = info.streams?.find(s=>s.codec_type==='video');
-    if(dm){
-      duration = parseFloat(info.format.duration);
-      fps = parseFloat(dm.avg_frame_rate.split('/')[0])/parseFloat(dm.avg_frame_rate.split('/')[1]||1);
+    function pad(n, digits=5){ return String(n).padStart(digits,'0'); }
+    function nowFilename(){ 
+      const d=new Date();
+      const pad2=(x)=>String(x).padStart(2,'0');
+      return `stego_${d.getFullYear()}${pad2(d.getMonth()+1)}${pad2(d.getDate())}_${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}.mp4`;
     }
-    return {duration,fps};
-  }
+    function messageToBinary(msg){ return (msg+'=====').split('').map(c=>c.charCodeAt(0).toString(2).padStart(8,'0')).join(''); }
+    function writeBitsToChannel(channelVal,bits,bitRange){
+      const origLen = bits.length;
+      if(bits.length<bitRange) bits += '0'.repeat(bitRange-bits.length);
+      const bin = channelVal.toString(2).padStart(8,'0');
+      const newBin = bin.slice(0, 8-bitRange) + bits;
+      return { newVal: parseInt(newBin,2), consumed: origLen };
+    }
 
-  async function generatePreviewAndEstimate(file){
-    statusText.textContent=''; capacityInfo.textContent=''; previewArea.style.display='none';
-    await loadFFmpeg();
-    await ffmpeg.writeFile('input.mp4', new Uint8Array(await file.arrayBuffer()));
-    statusText.textContent='Probing video metadata...';
-    const {duration,fps} = await probeVideo(file);
-    const fpsUsed = Math.max(1, Math.floor(fps));
+    async function probeVideo(file){
+      // write input then probe with ffprobe
+      await ffmpeg.writeFile('input.mp4', new Uint8Array(await file.arrayBuffer()));
+      // your ffmpeg wrapper's ffprobe returns parsed object (we used this earlier)
+      const info = await ffmpeg.ffprobe('input.mp4');
+      let duration = 0, fps = 25;
+      const vstream = info.streams?.find(s=>s.codec_type==='video');
+      if(info?.format?.duration) duration = parseFloat(info.format.duration) || 0;
+      if(vstream){
+        const afr = vstream.avg_frame_rate || vstream.r_frame_rate || '';
+        if(typeof afr === 'string' && afr.includes('/')){
+          const [num,den] = afr.split('/').map(Number);
+          if(den && isFinite(num) && den>0) fps = num/den;
+        } else {
+          const n = parseFloat(afr);
+          if(!isNaN(n) && isFinite(n)) fps = n;
+        }
+      }
+      return {duration, fps};
+    }
 
-    await ffmpeg.exec(['-i','input.mp4','-ss','00:00:00','-frames:v','1','f000.png']);
-    const f0 = await ffmpeg.readFile('f000.png');
-    const imgBlob = new Blob([f0.buffer],{type:'image/png'});
-    const img = new Image();
-    await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; img.src=URL.createObjectURL(imgBlob); });
-
-    frameCanvas.width=img.width; frameCanvas.height=img.height;
-    ctx.drawImage(img,0,0);
-    previewArea.style.display='block';
-
-    const bitRange = parseInt(bitRangeSelect.value,10);
-    const bitsPerFrame = img.width*img.height*3*bitRange;
-    const estFrames = Math.max(1, Math.round(duration*fpsUsed));
-    const totalCapacityBits = bitsPerFrame*estFrames;
-    capacityInfo.textContent=`Resolution ${img.width}×${img.height} | est frames ${estFrames} | capacity ≈ ${Math.floor(totalCapacityBits/8)} bytes (${totalCapacityBits} bits)`;
-    statusText.textContent=`Detected duration ${duration.toFixed(2)}s, fps ≈ ${fpsUsed}.`;
-  }
-
-  // --- Safe encodeSteg with batch processing ---
-  async function encodeSteg(file, message) {
-    canceled = false;
-    cancelBtn.disabled = false;
-    encodeBtn.disabled = true;
-    progressContainer.style.display = 'block';
-    progressBar.style.width = '0%';
-    progressBar.textContent = '0%';
-    statusText.textContent = 'Preparing...';
-  
-    try {
+    async function generatePreviewAndEstimate(file){
+      statusText.textContent=''; capacityInfo.textContent=''; previewArea.style.display='none';
       await loadFFmpeg();
-      const {duration, fps} = await probeVideo(file);
-      const fpsUsed = Math.max(1, Math.round(fps));
-      const totalFrames = Math.max(1, Math.round(duration * fpsUsed));
-      const binary = messageToBinary(message);
-      let bitIndex = 0;
-      const bitRange = parseInt(bitRangeSelect.value, 10);
-      const BATCH_SIZE = 5;
-  
-      // --- Encode frames in batches ---
-      for (let batchStart = 0; batchStart < totalFrames; batchStart += BATCH_SIZE) {
-        if (canceled) throw new Error('Encoding canceled');
-        const batchEnd = Math.min(batchStart + BATCH_SIZE, totalFrames);
-        const batchPromises = [];
-  
-        for (let i = batchStart; i < batchEnd; i++) {
-          batchPromises.push((async () => {
+      // write input.mp4 (probeVideo also writes but extra write is OK)
+      await ffmpeg.writeFile('input.mp4', new Uint8Array(await file.arrayBuffer()));
+      statusText.textContent='Probing video metadata...';
+      const {duration,fps} = await probeVideo(file);
+      const fpsUsed = Math.max(1, Math.floor(fps));
+      // extract first frame
+      await ffmpeg.exec(['-i','input.mp4','-ss','00:00:00','-frames:v','1','f000.png']);
+      const f0 = await ffmpeg.readFile('f000.png');
+      const imgBlob = new Blob([f0.buffer],{type:'image/png'});
+      const img = new Image();
+      await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; img.src=URL.createObjectURL(imgBlob); });
+      frameCanvas.width = img.width; frameCanvas.height = img.height;
+      ctx.drawImage(img,0,0);
+      previewArea.style.display='block';
+
+      const bitRange = parseInt(bitRangeSelect.value,10);
+      const bitsPerFrame = img.width*img.height*3*bitRange;
+      const estFrames = Math.max(1, Math.round(duration*fpsUsed));
+      const totalCapacityBits = bitsPerFrame*estFrames;
+      capacityInfo.textContent = `Resolution ${img.width}×${img.height} | est frames ${estFrames} | capacity ≈ ${Math.floor(totalCapacityBits/8)} bytes (${totalCapacityBits} bits)`;
+      statusText.textContent = `Detected duration ${duration.toFixed(2)}s, fps ≈ ${fpsUsed}.`;
+      // cleanup probe frame
+      try{ await ffmpeg.deleteFile('f000.png'); }catch(e){}
+    }
+
+    // --- Updated encodeSteg: 2-pass safe mux, overflow check, DELETE_ALL ---
+    async function encodeSteg(file, message){
+      canceled=false;
+      cancelBtn.disabled=false;
+      encodeBtn.disabled=true;
+      progressContainer.style.display='block';
+      progressBar.style.width='0%';
+      progressBar.textContent='0%';
+      statusText.textContent='Preparing...';
+
+      try{
+        await loadFFmpeg();
+
+        // write input and probe
+        await ffmpeg.writeFile('input.mp4', new Uint8Array(await file.arrayBuffer()));
+        statusText.textContent='Probing video metadata...';
+        const {duration,fps} = await probeVideo(file);
+        const fpsUsed = Math.max(1, Math.round(fps));
+        const totalFrames = Math.max(1, Math.round(duration * fpsUsed));
+
+        // make binary + capacity check
+        const binary = messageToBinary(message);
+        const bitRange = parseInt(bitRangeSelect.value,10);
+        const bitsPerFrameSample =  (frameCanvas.width || 1) * (frameCanvas.height || 1) * 3 * bitRange; 
+        // The best capacity estimate: extract first frame size now to compute correct per-frame bits
+        // extract one frame to get resolution (safe)
+        await ffmpeg.exec(['-i','input.mp4','-ss','00:00:00','-frames:v','1','probe_frame.png']);
+        const probeBytes = await ffmpeg.readFile('probe_frame.png');
+        const probeBlob = new Blob([probeBytes.buffer],{type:'image/png'});
+        const probeImg = new Image();
+        await new Promise((res,rej)=>{ probeImg.onload=res; probeImg.onerror=rej; probeImg.src=URL.createObjectURL(probeBlob); });
+        const width = probeImg.width, height = probeImg.height;
+        // cleanup probe image file after reading
+        try{ await ffmpeg.deleteFile('probe_frame.png'); } catch(e){/*ignore*/}
+
+        const bitsPerFrame = width * height * 3 * bitRange;
+        const totalCapacityBits = bitsPerFrame * totalFrames;
+
+        // fail on overflow
+        if (binary.length > totalCapacityBits) {
+          throw new Error(`Message exceeds capacity. Need ${binary.length} bits but capacity is ${totalCapacityBits} bits. Reduce message or increase bit range / resolution.`);
+        }
+
+        // extract audio first (2-pass strategy)
+        statusText.textContent = 'Extracting original audio...';
+        // choose a container that copies audio as-is; use m4a (AAC) or mp3 depending on input; copy stream
+        // If audio doesn't exist ffmpeg may fail — catch and continue (we'll handle missing audio)
+        let audioExtracted = false;
+        try{
+          await ffmpeg.exec(['-i','input.mp4','-vn','-acodec','copy','orig_audio.m4a']);
+          audioExtracted = true;
+        } catch(e){
+          // some files may not have audio -> continue but mark as no audio
+          audioExtracted = false;
+          console.warn('Audio extract failed (maybe no audio stream) — continuing without audio.');
+        }
+
+        // Prepare encoding loop: process sequentially (safer for FS).
+        statusText.textContent = 'Embedding message into frames...';
+        let bitIndex = 0;
+        const BATCH_SIZE = 5; // conservative
+
+        // We'll process frames sequentially in batches (but awaiting each frame op)
+        for(let batchStart=0; batchStart<totalFrames; batchStart+=BATCH_SIZE){
+          if(canceled) throw new Error('Encoding canceled by user');
+          const batchEnd = Math.min(batchStart + BATCH_SIZE, totalFrames);
+
+          for(let i=batchStart; i<batchEnd; i++){
             const ts = (i / fpsUsed).toFixed(3);
             const fname = `frame${pad(i)}.png`;
-            await ffmpeg.exec(['-i', 'input.mp4', '-ss', ts, '-frames:v', '1', fname]);
-  
+
+            // extract single frame
+            await ffmpeg.exec(['-i','input.mp4','-ss',ts,'-frames:v','1',fname]);
+
+            // read, modify, write
             const fdata = await ffmpeg.readFile(fname);
-            const blob = new Blob([fdata.buffer], {type:'image/png'});
+            const blob = new Blob([fdata.buffer],{type:'image/png'});
             const img = new Image();
-            await new Promise((res, rej) => {
+
+            await new Promise((res,rej)=>{
               const url = URL.createObjectURL(blob);
-              img.onload = () => { 
-                URL.revokeObjectURL(url); 
-                frameCanvas.width = img.width; 
-                frameCanvas.height = img.height; 
-                ctx.drawImage(img, 0, 0); 
-                res(); 
+              img.onload = async ()=>{
+                try{
+                  URL.revokeObjectURL(url);
+                  frameCanvas.width = img.width; frameCanvas.height = img.height;
+                  ctx.drawImage(img,0,0);
+
+                  const imageData = ctx.getImageData(0,0,frameCanvas.width,frameCanvas.height);
+                  const data = imageData.data;
+                  for(let p=0; p<data.length && bitIndex<binary.length; p+=4){
+                    for(let c=0;c<3 && bitIndex<binary.length;c++){
+                      const chunk = binary.slice(bitIndex, bitIndex + bitRange);
+                      const {newVal, consumed} = writeBitsToChannel(data[p+c], chunk, bitRange);
+                      data[p+c] = newVal;
+                      bitIndex += consumed;
+                    }
+                  }
+                  ctx.putImageData(imageData,0,0);
+                  // export PNG and write (overwrite same name)
+                  frameCanvas.toBlob(async (canvasBlob)=>{
+                    try{
+                      const ab = await canvasBlob.arrayBuffer();
+                      await ffmpeg.writeFile(fname, new Uint8Array(ab));
+                      res();
+                    }catch(e){ rej(e); }
+                  }, 'image/png');
+                }catch(e){ rej(e); }
               };
               img.onerror = rej;
               img.src = url;
             });
-  
-            // --- Embed secret bits ---
-            const imageData = ctx.getImageData(0,0,frameCanvas.width,frameCanvas.height);
-            const data = imageData.data;
-            for(let p=0; p<data.length && bitIndex<binary.length; p+=4){
-              for(let c=0; c<3 && bitIndex<binary.length; c++){
-                const chunk = binary.slice(bitIndex, bitIndex+bitRange);
-                const {newVal, consumed} = writeBitsToChannel(data[p+c], chunk, bitRange);
-                data[p+c] = newVal;
-                bitIndex += consumed;
-              }
-            }
-            ctx.putImageData(imageData,0,0);
-  
-            const canvasBlob = await new Promise(r=>frameCanvas.toBlob(r,'image/png'));
-            const ab = await canvasBlob.arrayBuffer();
-            await ffmpeg.writeFile(fname, new Uint8Array(ab));
-          })());
+
+            // update progress per-frame
+            const percent = Math.round(((i+1)/totalFrames)*100);
+            progressBar.style.width = percent + '%';
+            progressBar.textContent = `${percent}% (${i+1}/${totalFrames})`;
+            statusText.textContent = `Embedding frame ${i+1}/${totalFrames} — bits used ${bitIndex}/${binary.length}`;
+          } // end batch inner loop
+        } // end all batches
+
+        // All frames written (frame%05d.png)
+        statusText.textContent = 'Re-encoding frames to video (temp)...';
+
+        // create a temporary video from frames
+        // ensure fpsUsed is integer — use rounded fpsUsed
+        await ffmpeg.exec([
+          '-framerate', String(fpsUsed),
+          '-i', 'frame%05d.png',
+          '-c:v', 'libx264',
+          '-pix_fmt', 'yuv420p',
+          'stego_video_temp.mp4'
+        ]);
+
+        // remux audio if extracted
+        const finalName = nowFilename();
+        if(audioExtracted){
+          statusText.textContent = 'Remuxing audio back into stego video...';
+          await ffmpeg.exec([
+            '-i','stego_video_temp.mp4',
+            '-i','orig_audio.m4a',
+            '-c:v','copy',
+            '-c:a','copy',
+            '-map','0:v:0',
+            '-map','1:a:0',
+            finalName
+          ]);
+        } else {
+          // no audio: just rename temp to finalName (by copying)
+          statusText.textContent = 'No audio found — finalizing video...';
+          await ffmpeg.exec(['-i','stego_video_temp.mp4','-c','copy', finalName]);
         }
-  
-        await Promise.all(batchPromises);
-        progressBar.style.width = Math.round((batchEnd/totalFrames)*100)+'%';
-        progressBar.textContent = `${Math.round((batchEnd/totalFrames)*100)}% (${batchEnd}/${totalFrames})`;
-        statusText.textContent = `Embedding frames ${batchStart+1}-${batchEnd}/${totalFrames} — bits used ${bitIndex}/${binary.length}`;
+
+        // read output
+        const out = await ffmpeg.readFile(finalName);
+        const outBlob = new Blob([out.buffer],{type:'video/mp4'});
+        const url = URL.createObjectURL(outBlob);
+        const a = document.createElement('a');
+        a.href = url; a.download = finalName; a.className='btn btn-success mt-2';
+        a.textContent = 'Download encoded video';
+        statusText.textContent = 'Encoding complete — download below.';
+        statusText.appendChild(document.createElement('br'));
+        statusText.appendChild(a);
+        progressBar.style.width = '100%';
+        progressBar.textContent = '100%';
+
+        // CLEANUP: delete all temporary files (DELETE_ALL)
+        statusText.textContent += '\nCleaning up temporary files...';
+        try{
+          // delete frame files
+          for(let i=0;i<totalFrames;i++){
+            try{ await ffmpeg.deleteFile(`frame${pad(i)}.png`); } catch(e){ /*ignore*/ }
+          }
+          // delete other temporaries
+          try{ await ffmpeg.deleteFile('input.mp4'); } catch(e){}
+          try{ await ffmpeg.deleteFile('stego_video_temp.mp4'); } catch(e){}
+          try{ await ffmpeg.deleteFile('orig_audio.m4a'); } catch(e){}
+          // optionally delete finalName in FS if you don't want it kept in worker FS
+          try{ await ffmpeg.deleteFile(finalName); } catch(e){}
+        }catch(e){
+          console.warn('Cleanup warnings:', e);
+        }
+
+      } catch(err){
+        console.error('Encoding error:', err);
+        statusText.textContent = 'Error: ' + (err?.message || String(err));
+      } finally {
+        encodeBtn.disabled = false;
+        cancelBtn.disabled = true;
       }
-  
-      // --- Re-encode frames to video ---
-      statusText.textContent = 'Re-encoding frames to video...';
-      await ffmpeg.exec([
-        '-framerate', String(fpsUsed),
-        '-i', 'frame%05d.png',
-        '-c:v', 'libx264',
-        '-pix_fmt', 'yuv420p',
-        'stego_output.mp4'
-      ]);
-  
-      // --- Read output and clean up frames ---
-      const out = await ffmpeg.readFile('stego_output.mp4');
-      for(let i=0;i<totalFrames;i++){
-        await ffmpeg.deleteFile(`frame${pad(i)}.png`);
-      }
-  
-      const outBlob = new Blob([out.buffer], {type:'video/mp4'});
-      const url = URL.createObjectURL(outBlob);
-  
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'stego_encoded_video.mp4';
-      a.textContent = 'Download encoded video';
-      a.className='btn btn-success mt-2';
-      statusText.textContent='Encoding complete — download below.';
-      statusText.appendChild(document.createElement('br'));
-      statusText.appendChild(a);
-      progressBar.style.width='100%';
-      progressBar.textContent='100%';
-  
-    } catch(err) {
-      console.error('Encoding error:', err);
-      statusText.textContent='Error: '+(err?.message||String(err));
-    } finally {
-      encodeBtn.disabled = false;
-      cancelBtn.disabled = true;
-    }
-  }
+    } // encodeSteg end
 
-  videoInput.addEventListener('change', async ()=>{
-    capacityInfo.textContent=''; statusText.textContent=''; progressContainer.style.display='none'; encodeBtn.disabled=true;
-    try {
-      const file = videoInput.files[0]; if(!file) return;
-      await generatePreviewAndEstimate(file);
-      encodeBtn.disabled=false;
-    } catch(e){ console.error(e); statusText.textContent='Preview failed: '+(e.message||e); }
+    // UI event wiring
+    videoInput.addEventListener('change', async ()=>{
+      capacityInfo.textContent=''; statusText.textContent=''; progressContainer.style.display='none'; encodeBtn.disabled=true;
+      try{
+        const file = videoInput.files[0];
+        if(!file) return;
+        await generatePreviewAndEstimate(file);
+        encodeBtn.disabled=false;
+      } catch(e){ console.error(e); statusText.textContent='Preview failed: '+(e.message||e); }
+    });
+
+    encodeBtn.addEventListener('click', async ()=>{
+      const file = videoInput.files[0]; const msg = secretMessage.value || '';
+      if(!file){ alert('Select a video'); return; }
+      if(!msg){ alert('Type a secret message'); return; }
+      encodeBtn.disabled=true;
+      await encodeSteg(file,msg);
+    });
+
   });
-
-  encodeBtn.addEventListener('click', async ()=>{
-    const file = videoInput.files[0]; const msg = secretMessage.value||'';
-    if(!file){ alert('Select a video'); return; }
-    if(!msg){ alert('Type a secret message'); return; }
-    encodeBtn.disabled=true;
-    await encodeSteg(file,msg);
-  });
-
-});
   </script>
 </body>
 </html>
