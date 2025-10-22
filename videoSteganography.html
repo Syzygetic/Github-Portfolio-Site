@@ -176,50 +176,45 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       await loadFFmpeg();
   
-      // Write input video once
+      // Write original video
       await ffmpeg.writeFile('input.mp4', new Uint8Array(await file.arrayBuffer()));
   
-      // Probe video
+      // Probe metadata
       const { duration, fps } = await probeVideo(file);
       const fpsUsed = Math.max(1, Math.round(fps));
       const totalFrames = Math.max(1, Math.round(duration * fpsUsed));
   
+      // Convert message to binary
       const bitRange = parseInt(bitRangeSelect.value, 10);
       const binary = messageToBinary(message);
   
-      // Extract first frame for dimensions
+      // Extract first frame to calculate capacity
       const firstFrame = await extractFirstFrame('input.mp4');
       const bitsPerFrame = firstFrame.width * firstFrame.height * 3 * bitRange;
       const totalCapacityBits = bitsPerFrame * totalFrames;
       if (binary.length > totalCapacityBits)
         throw new Error(`Message too long! Requires ${binary.length} bits, capacity ${totalCapacityBits} bits.`);
   
-      statusText.textContent = 'Encoding video frame-by-frame...';
-      let bitIndex = 0;
+      statusText.textContent = 'Extracting all frames...';
   
-      // Create an empty output video container
+      // Extract all frames at once
       await ffmpeg.exec([
-        '-f', 'lavfi',
-        '-i', 'color=c=black:s=' + firstFrame.width + 'x' + firstFrame.height + ':d=0.001',
-        '-c:v', 'libx264',
-        '-pix_fmt', 'yuv420p',
-        'stego_temp.mp4'
+        '-i', 'input.mp4',
+        '-vf', `fps=${fpsUsed}`,
+        'frame%05d.png'
       ]);
+  
+      statusText.textContent = 'Embedding message into frames...';
+      let bitIndex = 0;
   
       for (let i = 0; i < totalFrames; i++) {
         if (canceled) throw new Error('Encoding canceled');
   
-        // Extract one frame from the input video
-        const frameName = 'frame.png';
-        await ffmpeg.exec([
-          '-i', 'input.mp4',
-          '-vf', `select=eq(n\\,${i})`,
-          '-frames:v', '1',
-          frameName
-        ]);
+        const fname = `frame${pad(i)}.png`;
+        const fdata = await ffmpeg.readFile(fname);
   
-        const frameData = await ffmpeg.readFile(frameName);
-        const blob = new Blob([frameData.buffer], { type: 'image/png' });
+        // Convert to Image
+        const blob = new Blob([fdata.buffer], { type: 'image/png' });
         const img = new Image();
         await new Promise((res, rej) => {
           const url = URL.createObjectURL(blob);
@@ -232,7 +227,7 @@ document.addEventListener('DOMContentLoaded', () => {
         frameCanvas.height = img.height;
         ctx.drawImage(img, 0, 0);
   
-        // Embed secret bits
+        // Embed message
         const imageData = ctx.getImageData(0, 0, img.width, img.height);
         const data = imageData.data;
         for (let p = 0; p < data.length && bitIndex < binary.length; p += 4) {
@@ -245,56 +240,52 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         ctx.putImageData(imageData, 0, 0);
   
-        // Convert canvas back to ArrayBuffer and write to MEMFS
+        // Save frame back
         const canvasBlob = await new Promise(r => frameCanvas.toBlob(r, 'image/png'));
         const ab = await canvasBlob.arrayBuffer();
-        await ffmpeg.writeFile(frameName, new Uint8Array(ab));
+        await ffmpeg.writeFile(fname, new Uint8Array(ab));
   
-        // Append the frame to output video
-        await ffmpeg.exec([
-          '-y',
-          '-i', 'stego_temp.mp4',
-          '-i', frameName,
-          '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0[outv]',
-          '-map', '[outv]',
-          '-c:v', 'libx264',
-          '-pix_fmt', 'yuv420p',
-          'stego_temp_next.mp4'
-        ]);
-  
-        // Replace previous temp with new video
-        try { await ffmpeg.deleteFile('stego_temp.mp4'); } catch(e){}
-        await ffmpeg.rename('stego_temp_next.mp4', 'stego_temp.mp4');
-  
-        // Remove processed frame to save memory
-        try { await ffmpeg.deleteFile(frameName); } catch(e){}
-  
-        // Update progress
+        // Progress
         const percent = Math.round(((i + 1) / totalFrames) * 100);
         progressBar.style.width = percent + '%';
         progressBar.textContent = `${percent}% (${i + 1}/${totalFrames})`;
       }
   
-      const out = await ffmpeg.readFile('stego_temp.mp4');
+      statusText.textContent = 'Extracting audio...';
+      await ffmpeg.exec(['-i', 'input.mp4', '-vn', '-c:a', 'aac', 'audio.aac']);
+  
+      statusText.textContent = 'Re-encoding video with embedded frames...';
+      await ffmpeg.exec([
+        '-framerate', String(fpsUsed),
+        '-i', 'frame%05d.png',
+        '-i', 'audio.aac',
+        '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac',
+        'stego_output.mp4'
+      ]);
+  
+      const out = await ffmpeg.readFile('stego_output.mp4');
+  
+      // Cleanup all frames and audio
+      for (let i = 0; i < totalFrames; i++) {
+        try { await ffmpeg.deleteFile(`frame${pad(i)}.png`); } catch (e) {}
+      }
+      try { await ffmpeg.deleteFile('input.mp4'); } catch (e) {}
+      try { await ffmpeg.deleteFile('audio.aac'); } catch (e) {}
+  
       const outBlob = new Blob([out.buffer], { type: 'video/mp4' });
       const url = URL.createObjectURL(outBlob);
-  
       const a = document.createElement('a');
       a.href = url;
       a.download = 'stego_encoded_video.mp4';
       a.textContent = 'Download encoded video';
       a.className = 'btn btn-success mt-2';
-  
       statusText.textContent = 'Encoding complete — download below.';
       statusText.appendChild(document.createElement('br'));
       statusText.appendChild(a);
   
       progressBar.style.width = '100%';
       progressBar.textContent = '100%';
-  
-      // Cleanup
-      try { await ffmpeg.deleteFile('input.mp4'); } catch(e){}
-      try { await ffmpeg.deleteFile('stego_temp.mp4'); } catch(e){}
   
     } catch (err) {
       console.error('Encoding error:', err);
