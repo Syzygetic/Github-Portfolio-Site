@@ -42,19 +42,20 @@
     </div>
   </div>
 
-  <!-- Include UMD version of FFmpeg -->
-  <script src="./assets/ffmpeg/ffmpeg.js"></script>
-  <script>
+  <!-- Import ESM version of FFmpeg -->
+  <script type="module">
+    import { createFFmpeg, fetchFile } from './assets/ffmpeg/esm/index.js';
+
     const videoInput = document.getElementById('videoInput');
     const encodeBtn = document.getElementById('encodeBtn');
     const previewArea = document.getElementById('previewArea');
     const frameCanvas = document.getElementById('frameCanvas');
     const ctx = frameCanvas.getContext('2d');
 
-    const ffmpeg = FFmpeg.createFFmpeg({
+    const ffmpeg = createFFmpeg({
       log: true,
       corePath: './assets/ffmpeg/ffmpeg-core.wasm',
-      workerPath: './assets/ffmpeg/worker.js'
+      workerPath: './assets/ffmpeg/esm/worker.js'
     });
 
     async function loadFFmpeg() {
@@ -72,7 +73,7 @@
     async function generatePreview(file) {
       try {
         await loadFFmpeg();
-        ffmpeg.FS('writeFile', 'input.mp4', await fetch(file).then(res => res.arrayBuffer()));
+        ffmpeg.FS('writeFile', 'input.mp4', await fetchFile(file));
 
         await ffmpeg.run('-i', 'input.mp4', '-ss', '00:00:00', '-frames:v', '1', 'preview.png');
 
