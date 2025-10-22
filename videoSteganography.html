@@ -194,26 +194,32 @@ document.addEventListener('DOMContentLoaded', () => {
       if (binary.length > totalCapacityBits)
         throw new Error(`Message too long! Requires ${binary.length} bits, capacity ${totalCapacityBits} bits.`);
   
-      statusText.textContent = 'Embedding message frame-by-frame...';
+      statusText.textContent = 'Encoding video frame-by-frame...';
       let bitIndex = 0;
   
-      // Instead of writing all frames, we'll create a virtual video stream using FFmpeg filters
+      // Create an empty output video container
+      await ffmpeg.exec([
+        '-f', 'lavfi',
+        '-i', 'color=c=black:s=' + firstFrame.width + 'x' + firstFrame.height + ':d=0.001',
+        '-c:v', 'libx264',
+        '-pix_fmt', 'yuv420p',
+        'stego_temp.mp4'
+      ]);
+  
       for (let i = 0; i < totalFrames; i++) {
         if (canceled) throw new Error('Encoding canceled');
   
-        const fname = `frame.png`;
-  
-        // Extract frame i
+        // Extract one frame from the input video
+        const frameName = 'frame.png';
         await ffmpeg.exec([
           '-i', 'input.mp4',
           '-vf', `select=eq(n\\,${i})`,
           '-frames:v', '1',
-          fname
+          frameName
         ]);
   
-        // Read frame
-        const fdata = await ffmpeg.readFile(fname);
-        const blob = new Blob([fdata.buffer], { type: 'image/png' });
+        const frameData = await ffmpeg.readFile(frameName);
+        const blob = new Blob([frameData.buffer], { type: 'image/png' });
         const img = new Image();
         await new Promise((res, rej) => {
           const url = URL.createObjectURL(blob);
@@ -226,7 +232,7 @@ document.addEventListener('DOMContentLoaded', () => {
         frameCanvas.height = img.height;
         ctx.drawImage(img, 0, 0);
   
-        // Embed message
+        // Embed secret bits
         const imageData = ctx.getImageData(0, 0, img.width, img.height);
         const data = imageData.data;
         for (let p = 0; p < data.length && bitIndex < binary.length; p += 4) {
@@ -239,49 +245,56 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         ctx.putImageData(imageData, 0, 0);
   
-        // Write frame back to FS
+        // Convert canvas back to ArrayBuffer and write to MEMFS
         const canvasBlob = await new Promise(r => frameCanvas.toBlob(r, 'image/png'));
         const ab = await canvasBlob.arrayBuffer();
-        await ffmpeg.writeFile(fname, new Uint8Array(ab));
+        await ffmpeg.writeFile(frameName, new Uint8Array(ab));
   
-        // Append frame to video incrementally using FFmpeg
+        // Append the frame to output video
         await ffmpeg.exec([
           '-y',
-          '-i', fname,
+          '-i', 'stego_temp.mp4',
+          '-i', frameName,
+          '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0[outv]',
+          '-map', '[outv]',
           '-c:v', 'libx264',
           '-pix_fmt', 'yuv420p',
-          '-vf', `fps=${fpsUsed}`,
-          '-f', 'mp4',
-          '-movflags', 'frag_keyframe+empty_moov',
-          'stego_temp.mp4'
+          'stego_temp_next.mp4'
         ]);
   
-        // Clean up current frame to free memory
-        await ffmpeg.deleteFile(fname);
+        // Replace previous temp with new video
+        try { await ffmpeg.deleteFile('stego_temp.mp4'); } catch(e){}
+        await ffmpeg.rename('stego_temp_next.mp4', 'stego_temp.mp4');
   
+        // Remove processed frame to save memory
+        try { await ffmpeg.deleteFile(frameName); } catch(e){}
+  
+        // Update progress
         const percent = Math.round(((i + 1) / totalFrames) * 100);
         progressBar.style.width = percent + '%';
         progressBar.textContent = `${percent}% (${i + 1}/${totalFrames})`;
       }
   
-      // Final output
       const out = await ffmpeg.readFile('stego_temp.mp4');
-  
-      // Clean up
-      try { await ffmpeg.deleteFile('input.mp4'); } catch(e){}
-  
       const outBlob = new Blob([out.buffer], { type: 'video/mp4' });
       const url = URL.createObjectURL(outBlob);
+  
       const a = document.createElement('a');
       a.href = url;
       a.download = 'stego_encoded_video.mp4';
       a.textContent = 'Download encoded video';
       a.className = 'btn btn-success mt-2';
+  
       statusText.textContent = 'Encoding complete — download below.';
       statusText.appendChild(document.createElement('br'));
       statusText.appendChild(a);
+  
       progressBar.style.width = '100%';
       progressBar.textContent = '100%';
+  
+      // Cleanup
+      try { await ffmpeg.deleteFile('input.mp4'); } catch(e){}
+      try { await ffmpeg.deleteFile('stego_temp.mp4'); } catch(e){}
   
     } catch (err) {
       console.error('Encoding error:', err);
