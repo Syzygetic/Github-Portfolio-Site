@@ -51,7 +51,11 @@
     const frameCanvas = document.getElementById('frameCanvas');
     const ctx = frameCanvas.getContext('2d');
 
-    const ffmpeg = createFFmpeg({ log: true });
+    // Use corePath to load ffmpeg-core.worker.js & .wasm from CDN
+    const ffmpeg = createFFmpeg({
+      log: true,
+      corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/ffmpeg-core.js'
+    });
 
     async function loadFFmpeg() {
       try {
