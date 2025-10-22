@@ -1,0 +1,24 @@
+{
+  "name": "github-portfolio-site",
+  "version": "1.0.0",
+  "description": "This project explores using GitHub Pages to host my personal portfolio website and to explore interesting web development concepts/ideas. Currently the website includes:",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Syzygetic/Github-Portfolio-Site.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Syzygetic/Github-Portfolio-Site/issues"
+  },
+  "homepage": "https://github.com/Syzygetic/Github-Portfolio-Site#readme",
+  "dependencies": {
+    "@ffmpeg/core": "^0.12.10",
+    "@ffmpeg/ffmpeg": "^0.12.15"
+  }
+}

@@ -43,7 +43,7 @@
   </div>
 
   <script type="module">
-    import { createFFmpeg, fetchFile } from 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/ffmpeg.min.mjs';
+    import { createFFmpeg, fetchFile } from './assets/ffmpeg/index.js';
 
     const videoInput = document.getElementById('videoInput');
     const encodeBtn = document.getElementById('encodeBtn');
@@ -51,10 +51,10 @@
     const frameCanvas = document.getElementById('frameCanvas');
     const ctx = frameCanvas.getContext('2d');
 
-    // Use corePath to load ffmpeg-core.worker.js & .wasm from CDN
     const ffmpeg = createFFmpeg({
       log: true,
-      corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/ffmpeg-core.js'
+      workerPath: './assets/ffmpeg/worker.js',
+      corePath: './assets/ffmpeg/ffmpeg-core.wasm'
     });
 
     async function loadFFmpeg() {
