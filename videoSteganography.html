@@ -172,101 +172,126 @@ document.addEventListener('DOMContentLoaded', () => {
     progressBar.style.width = '0%';
     progressBar.textContent = '0%';
     statusText.textContent = 'Preparing...';
-
+  
     try {
       await loadFFmpeg();
       await ffmpeg.writeFile('input.mp4', new Uint8Array(await file.arrayBuffer()));
+  
       const { duration, fps } = await probeVideo(file);
       const fpsUsed = Math.max(1, Math.round(fps));
       const totalFrames = Math.max(1, Math.round(duration * fpsUsed));
-
-      const binary = messageToBinary(message);
+  
       const bitRange = parseInt(bitRangeSelect.value, 10);
-
-      // Extract first frame for dimensions
+      const binary = messageToBinary(message);
+  
+      // Extract first frame to determine dimensions
       const firstFrame = await extractFirstFrame('input.mp4');
-      const bitsPerFrame = firstFrame.width*firstFrame.height*3*bitRange;
-      const totalCapacityBits = bitsPerFrame*totalFrames;
-      if(binary.length>totalCapacityBits) throw new Error(`Message too long! Requires ${binary.length} bits, capacity ${totalCapacityBits} bits.`);
-
-      statusText.textContent='Extracting all frames...';
-      await ffmpeg.exec(['-i','input.mp4','-vf',`fps=${fpsUsed}`,'frame%05d.png']);
-
-      statusText.textContent='Extracting audio...';
-      await ffmpeg.exec(['-i','input.mp4','-vn','-c:a','aac','audio.aac']);
-
-      statusText.textContent='Embedding message into frames...';
-      let bitIndex=0;
-      for(let i=0;i<totalFrames;i++){
-        if(canceled) throw new Error('Encoding canceled');
-
-        const fname=`frame${pad(i)}.png`;
-        const fdata = await ffmpeg.readFile(fname);
-        const blob = new Blob([fdata.buffer],{type:'image/png'});
+      const bitsPerFrame = firstFrame.width * firstFrame.height * 3 * bitRange;
+      const totalCapacityBits = bitsPerFrame * totalFrames;
+      if (binary.length > totalCapacityBits)
+        throw new Error(`Message too long! Requires ${binary.length} bits, capacity ${totalCapacityBits} bits.`);
+  
+      statusText.textContent = 'Embedding message frame-by-frame...';
+      let bitIndex = 0;
+  
+      for (let i = 0; i < totalFrames; i++) {
+        if (canceled) throw new Error('Encoding canceled');
+  
+        const fname = `frame${pad(i)}.png`;
+  
+        // Extract only the current frame
+        await ffmpeg.exec([
+          '-i', 'input.mp4',
+          '-vf', `select=eq(n\\,${i})`,
+          '-frames:v', '1',
+          fname
+        ]);
+  
+        // Read frame from FS
+        let fdata;
+        try {
+          fdata = await ffmpeg.readFile(fname);
+        } catch (e) {
+          console.warn('Skipping missing frame:', fname, e);
+          continue;
+        }
+  
+        // Convert to Image
+        const blob = new Blob([fdata.buffer], { type: 'image/png' });
         const img = new Image();
-        await new Promise((res,rej)=>{
+        await new Promise((res, rej) => {
           const url = URL.createObjectURL(blob);
-          img.onload = ()=>{
-            URL.revokeObjectURL(url);
-            frameCanvas.width=img.width; frameCanvas.height=img.height;
-            ctx.drawImage(img,0,0);
-            res();
-          };
+          img.onload = () => { URL.revokeObjectURL(url); res(); };
           img.onerror = rej;
-          img.src=url;
+          img.src = url;
         });
-
-        const imageData = ctx.getImageData(0,0,frameCanvas.width,frameCanvas.height);
+  
+        frameCanvas.width = img.width;
+        frameCanvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+  
+        // Embed message into frame
+        const imageData = ctx.getImageData(0, 0, img.width, img.height);
         const data = imageData.data;
-        for(let p=0;p<data.length && bitIndex<binary.length;p+=4){
-          for(let c=0;c<3 && bitIndex<binary.length;c++){
-            const chunk=binary.slice(bitIndex, bitIndex+bitRange);
-            const {newVal, consumed} = writeBitsToChannel(data[p+c], chunk, bitRange);
-            data[p+c]=newVal;
-            bitIndex+=consumed;
+        for (let p = 0; p < data.length && bitIndex < binary.length; p += 4) {
+          for (let c = 0; c < 3 && bitIndex < binary.length; c++) {
+            const chunk = binary.slice(bitIndex, bitIndex + bitRange);
+            const { newVal, consumed } = writeBitsToChannel(data[p + c], chunk, bitRange);
+            data[p + c] = newVal;
+            bitIndex += consumed;
           }
         }
-        ctx.putImageData(imageData,0,0);
-
-        const canvasBlob = await new Promise(r=>frameCanvas.toBlob(r,'image/png'));
+        ctx.putImageData(imageData, 0, 0);
+  
+        // Save back to FS
+        const canvasBlob = await new Promise(r => frameCanvas.toBlob(r, 'image/png'));
         const ab = await canvasBlob.arrayBuffer();
-        await ffmpeg.writeFile(fname,new Uint8Array(ab));
-
-        const percent = Math.round(((i+1)/totalFrames)*100);
-        progressBar.style.width = percent+'%';
-        progressBar.textContent = `${percent}% (${i+1}/${totalFrames})`;
+        await ffmpeg.writeFile(fname, new Uint8Array(ab));
+  
+        // Progress
+        const percent = Math.round(((i + 1) / totalFrames) * 100);
+        progressBar.style.width = percent + '%';
+        progressBar.textContent = `${percent}% (${i + 1}/${totalFrames})`;
+  
+        // Remove frame from FS to save memory
+        try { await ffmpeg.deleteFile(fname); } catch (e) {}
       }
-
-      statusText.textContent='Re-encoding video with audio...';
+  
+      statusText.textContent = 'Re-encoding video with audio...';
       await ffmpeg.exec([
-        '-framerate', String(fpsUsed),
-        '-i','frame%05d.png',
-        '-i','audio.aac',
-        '-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','stego_output.mp4'
+        '-i', 'input.mp4',
+        '-i', 'audio.aac', // If you want audio
+        '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac',
+        'stego_output.mp4'
       ]);
-
+  
       const out = await ffmpeg.readFile('stego_output.mp4');
-
-      statusText.textContent='Cleaning up temporary files...';
-      for(let i=0;i<totalFrames;i++) await ffmpeg.deleteFile(`frame${pad(i)}.png`);
-      await ffmpeg.deleteFile('audio.aac');
-      await ffmpeg.deleteFile('input.mp4');
-
-      const outBlob = new Blob([out.buffer],{type:'video/mp4'});
+  
+      // Cleanup
+      try { await ffmpeg.deleteFile('input.mp4'); } catch (e) {}
+      try { await ffmpeg.deleteFile('audio.aac'); } catch (e) {}
+  
+      const outBlob = new Blob([out.buffer], { type: 'video/mp4' });
       const url = URL.createObjectURL(outBlob);
       const a = document.createElement('a');
-      a.href=url; a.download='stego_encoded_video.mp4';
-      a.textContent='Download encoded video'; a.className='btn btn-success mt-2';
-      statusText.textContent='Encoding complete — download below.';
+      a.href = url;
+      a.download = 'stego_encoded_video.mp4';
+      a.textContent = 'Download encoded video';
+      a.className = 'btn btn-success mt-2';
+      statusText.textContent = 'Encoding complete — download below.';
       statusText.appendChild(document.createElement('br'));
       statusText.appendChild(a);
-      progressBar.style.width='100%'; progressBar.textContent='100%';
-
-    } catch(err){
-      console.error('Encoding error:',err);
-      statusText.textContent='Error: '+(err?.message||String(err));
+  
+      progressBar.style.width = '100%';
+      progressBar.textContent = '100%';
+  
+    } catch (err) {
+      console.error('Encoding error:', err);
+      statusText.textContent = 'Error: ' + (err?.message || String(err));
     } finally {
-      encodeBtn.disabled=false; cancelBtn.disabled=true;
+      encodeBtn.disabled = false;
+      cancelBtn.disabled = true;
     }
   }
 
