@@ -207,7 +207,6 @@
             const fdata=await ffmpeg.readFile(fname);
             const blob=new Blob([fdata.buffer],{type:'image/png'});
             const img=new Image();
-
             await new Promise((res,rej)=>{
               img.onload=async ()=>{
                 frameCanvas.width=img.width;
@@ -226,13 +225,15 @@
                 }
                 ctx.putImageData(imageData,0,0);
 
-                frameCanvas.toBlob(async (canvasBlob)=>{
-                  const ab = await canvasBlob.arrayBuffer();
-                  await ffmpeg.writeFile(fname,new Uint8Array(ab));
-                  // Free memory immediately
-                  await ffmpeg.unlink(fname);
-                  res();
-                },'image/png');
+                const canvasBlob = await new Promise(r=>frameCanvas.toBlob(r,'image/png'));
+                const ab = await canvasBlob.arrayBuffer();
+                const CHUNK_SIZE = 1024*1024; // 1MB
+                for(let offset=0; offset<ab.byteLength; offset+=CHUNK_SIZE){
+                  const chunk = new Uint8Array(ab.slice(offset, offset+CHUNK_SIZE));
+                  await ffmpeg.writeFile(fname, chunk, offset===0);
+                }
+                await ffmpeg.deleteFile(fname); // free memory after each frame
+                res();
               };
               img.onerror=rej;
               img.src=URL.createObjectURL(blob);
