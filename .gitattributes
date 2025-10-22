@@ -1,0 +1,6 @@
+# Force LF for JavaScript / TypeScript / WASM files
+*.js text eol=lf
+*.mjs text eol=lf
+*.ts text eol=lf
+*.d.ts text eol=lf
+*.wasm binary
