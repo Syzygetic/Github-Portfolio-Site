@@ -45,23 +45,21 @@
   <!-- Load your self-hosted UMD build -->
   <script src="./assets/ffmpeg/umd/ffmpeg.js"></script>
   <script>
-    // Extract createFFmpeg & fetchFile from the global FFmpegWASM
-    const { createFFmpeg, fetchFile } = FFmpegWASM;
-
     const videoInput = document.getElementById('videoInput');
     const encodeBtn = document.getElementById('encodeBtn');
     const previewArea = document.getElementById('previewArea');
     const frameCanvas = document.getElementById('frameCanvas');
     const ctx = frameCanvas.getContext('2d');
 
-    const ffmpeg = createFFmpeg({
+    // Instantiate FFmpeg class from the UMD build
+    const ffmpeg = new FFmpegWASM.FFmpeg({
       log: true,
       corePath: './assets/ffmpeg/ffmpeg-core.wasm',
       workerPath: './assets/ffmpeg/esm/worker.js'
     });
 
     async function loadFFmpeg() {
-      if (!ffmpeg.isLoaded()) {
+      if (!ffmpeg.loaded) {
         console.log('Loading FFmpeg...');
         await ffmpeg.load();
         console.log('FFmpeg loaded');
@@ -71,13 +69,13 @@
     async function generatePreview(file) {
       try {
         await loadFFmpeg();
-        const data = await fetchFile(file);
-        ffmpeg.FS('writeFile', 'input.mp4', data);
+        const arrayBuffer = await file.arrayBuffer();
+        await ffmpeg.writeFile('input.mp4', new Uint8Array(arrayBuffer));
 
-        await ffmpeg.run('-i', 'input.mp4', '-ss', '00:00:00', '-frames:v', '1', 'preview.png');
+        await ffmpeg.exec(['-i', 'input.mp4', '-ss', '00:00:00', '-frames:v', '1', 'preview.png']);
 
-        const previewData = ffmpeg.FS('readFile', 'preview.png');
-        const blob = new Blob([previewData.buffer], { type: 'image/png' });
+        const data = await ffmpeg.readFile('preview.png');
+        const blob = new Blob([data.buffer], { type: 'image/png' });
         const img = new Image();
         img.onload = function() {
           frameCanvas.width = img.width;
@@ -86,7 +84,7 @@
           previewArea.style.display = 'block';
         };
         img.src = URL.createObjectURL(blob);
-      } catch(e) {
+      } catch (e) {
         console.error('Error generating preview:', e);
       }
     }
