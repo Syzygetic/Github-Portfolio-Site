@@ -50,7 +50,7 @@
     const frameCanvas = document.getElementById('frameCanvas');
     const ctx = frameCanvas.getContext('2d');
 
-    const { createFFmpeg, fetchFile } = FFmpeg;
+    const { createFFmpeg, fetchFile } = window.FFmpeg;
     const ffmpeg = createFFmpeg({ log: true });
 
     async function loadFFmpeg() {
