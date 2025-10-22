@@ -11,7 +11,8 @@
     .card { border-radius: 1rem; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05); }
     .btn-primary { background-color: #5dade2; border-color: #5dade2; }
     .btn-primary:hover { background-color: #3498db; }
-    #progressContainer { display: none; margin-top: 1rem; }
+    #progressContainer { display:none; margin-top: 1rem; }
+    #progressBar { width: 0%; }
   </style>
 </head>
 <body>
@@ -36,10 +37,9 @@
       </div>
       <button class="btn btn-primary" id="encodeBtn" disabled>Encode Message</button>
 
-      <!-- Progress Bar -->
       <div id="progressContainer">
         <div class="progress">
-          <div id="progressBar" class="progress-bar" role="progressbar" style="width: 0%;">0%</div>
+          <div class="progress-bar progress-bar-striped progress-bar-animated" id="progressBar" role="progressbar">0%</div>
         </div>
         <div id="statusText" class="mt-2"></div>
       </div>
@@ -51,7 +51,7 @@
     </div>
   </div>
 
-  <!-- Self-hosted UMD FFmpeg -->
+  <!-- Load your self-hosted UMD build -->
   <script src="./assets/ffmpeg/umd/ffmpeg.js"></script>
   <script>
     const videoInput = document.getElementById('videoInput');
@@ -60,11 +60,11 @@
     const previewArea = document.getElementById('previewArea');
     const frameCanvas = document.getElementById('frameCanvas');
     const ctx = frameCanvas.getContext('2d');
+
     const progressContainer = document.getElementById('progressContainer');
     const progressBar = document.getElementById('progressBar');
     const statusText = document.getElementById('statusText');
 
-    // Instantiate FFmpeg
     const ffmpeg = new FFmpegWASM.FFmpeg({
       log: true,
       corePath: './assets/ffmpeg/ffmpeg-core.wasm',
@@ -95,7 +95,6 @@
           frameCanvas.height = img.height;
           ctx.drawImage(img, 0, 0);
           previewArea.style.display = 'block';
-          encodeBtn.disabled = false;
         };
         img.src = URL.createObjectURL(blob);
       } catch (e) {
@@ -108,72 +107,82 @@
         progressContainer.style.display = 'block';
         progressBar.style.width = '0%';
         progressBar.textContent = '0%';
-        statusText.textContent = 'Starting encoding...';
+        statusText.textContent = 'Initializing encoding...';
 
         await loadFFmpeg();
         const arrayBuffer = await file.arrayBuffer();
         await ffmpeg.writeFile('input.mp4', new Uint8Array(arrayBuffer));
 
-        // Get metadata for total frames
-        const ffprobeOutput = await ffmpeg.ffprobe('input.mp4');
-        const videoStream = ffprobeOutput.streams.find(s => s.codec_type === 'video');
-        const totalFrames = videoStream.nb_frames
-          ? parseInt(videoStream.nb_frames)
-          : Math.round(videoStream.avg_frame_rate.split('/')[0] / videoStream.avg_frame_rate.split('/')[1] * videoStream.duration);
-
+        // Track progress using FFmpeg logs
+        let totalFrames = null;
+        let durationSeconds = null;
         ffmpeg.on('log', ({ message }) => {
-          const match = message.match(/frame=\s*(\d+)/);
-          if (match) {
-            const frame = parseInt(match[1]);
-            const percent = Math.min(Math.round((frame / totalFrames) * 100), 100);
-            progressBar.style.width = percent + '%';
-            progressBar.textContent = percent + '%';
-            statusText.textContent = `Encoding frame ${frame} / ${totalFrames}`;
+          // Try to parse duration
+          if (!durationSeconds) {
+            const match = message.match(/Duration: (\d+):(\d+):(\d+\.\d+)/);
+            if (match) {
+              durationSeconds = parseInt(match[1])*3600 + parseInt(match[2])*60 + parseFloat(match[3]);
+            }
+          }
+
+          const frameMatch = message.match(/frame=\s*(\d+)/);
+          if (frameMatch) {
+            const frame = parseInt(frameMatch[1]);
+            if (durationSeconds && !totalFrames) {
+              const fpsMatch = message.match(/fps=\s*([\d.]+)/);
+              if (fpsMatch) totalFrames = Math.round(fpsMatch[1] * durationSeconds);
+            }
+
+            if (totalFrames) {
+              const percent = Math.min(Math.round((frame / totalFrames) * 100), 100);
+              progressBar.style.width = percent + '%';
+              progressBar.textContent = percent + '%';
+              statusText.textContent = `Encoding frame ${frame} / ${totalFrames}`;
+            } else {
+              progressBar.style.width = '0%';
+              progressBar.textContent = `Encoding frame ${frame} / ?`;
+              statusText.textContent = `Encoding frame ${frame} ...`;
+            }
           }
         });
 
-        await ffmpeg.exec([
-          '-i', 'input.mp4',
-          '-vf', `drawtext=text='${message}':x=10:y=10:fontsize=24:fontcolor=white`,
-          '-c:v', 'libx264',
-          '-preset', 'fast',
-          'output.mp4'
-        ]);
+        // TODO: Replace this with your actual steganography encoding command
+        await ffmpeg.exec(['-i', 'input.mp4', '-c:v', 'copy', 'output.mp4']);
 
-        const outputData = await ffmpeg.readFile('output.mp4');
-        const blob = new Blob([outputData.buffer], { type: 'video/mp4' });
-        const url = URL.createObjectURL(blob);
+        const outData = await ffmpeg.readFile('output.mp4');
+        const outBlob = new Blob([outData.buffer], { type: 'video/mp4' });
+        const url = URL.createObjectURL(outBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'encoded_video.mp4';
+        a.click();
 
         progressBar.style.width = '100%';
         progressBar.textContent = '100%';
         statusText.textContent = 'Encoding complete!';
-
-        // Download link
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'encoded_video.mp4';
-        a.textContent = 'Download Encoded Video';
-        statusText.appendChild(document.createElement('br'));
-        statusText.appendChild(a);
-
       } catch (e) {
         console.error('Encoding error:', e);
-        statusText.textContent = 'Error during encoding';
+        statusText.textContent = 'Encoding failed: ' + e.message;
       }
     }
 
     videoInput.addEventListener('change', async () => {
+      encodeBtn.disabled = !videoInput.files.length;
       if (videoInput.files.length) {
         await generatePreview(videoInput.files[0]);
       }
     });
 
     encodeBtn.addEventListener('click', async () => {
-      if (videoInput.files.length && secretMessage.value.trim()) {
-        encodeBtn.disabled = true;
-        await encodeVideo(videoInput.files[0], secretMessage.value.trim());
-        encodeBtn.disabled = false;
+      if (!videoInput.files.length) return;
+      const message = secretMessage.value.trim();
+      if (!message) {
+        alert('Please enter a secret message.');
+        return;
       }
+      encodeBtn.disabled = true;
+      await encodeVideo(videoInput.files[0], message);
+      encodeBtn.disabled = false;
     });
   </script>
 </body>
