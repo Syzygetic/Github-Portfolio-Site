@@ -44,14 +44,8 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/ffmpeg.min.js"></script>
   <script>
-    // Placeholder JS: will be replaced with actual pipeline
     const videoInput = document.getElementById('videoInput');
     const encodeBtn = document.getElementById('encodeBtn');
-
-    videoInput.addEventListener('change', () => {
-      encodeBtn.disabled = !videoInput.files.length;
-    });
-  // Load ffmpeg and extract first frame
     const previewArea = document.getElementById('previewArea');
     const frameCanvas = document.getElementById('frameCanvas');
     const ctx = frameCanvas.getContext('2d');
@@ -60,28 +54,44 @@
     const ffmpeg = createFFmpeg({ log: true });
 
     async function loadFFmpeg() {
-      if (!ffmpeg.isLoaded()) {
-        await ffmpeg.load();
+      try {
+        if (!ffmpeg.isLoaded()) {
+          console.log('Loading FFmpeg...');
+          await ffmpeg.load();
+          console.log('FFmpeg loaded');
+        }
+      } catch(e) {
+        console.error('FFmpeg load failed:', e);
       }
     }
 
     async function generatePreview(file) {
-      await loadFFmpeg();
-      ffmpeg.FS('writeFile', 'input.mp4', await fetchFile(file));
-      await ffmpeg.run('-i', 'input.mp4', '-ss', '00:00:00', '-frames:v', '1', 'preview.png');
-      const data = ffmpeg.FS('readFile', 'preview.png');
-      const blob = new Blob([data.buffer], { type: 'image/png' });
-      const img = new Image();
-      img.onload = function() {
-        frameCanvas.width = img.width;
-        frameCanvas.height = img.height;
-        ctx.drawImage(img, 0, 0);
-        previewArea.style.display = 'block';
-      };
-      img.src = URL.createObjectURL(blob);
+      try {
+        await loadFFmpeg();
+        console.log('Writing video file to FFmpeg FS');
+        ffmpeg.FS('writeFile', 'input.mp4', await fetchFile(file));
+
+        console.log('Extracting first frame...');
+        await ffmpeg.run('-i', 'input.mp4', '-ss', '00:00:00', '-frames:v', '1', 'preview.png');
+
+        const data = ffmpeg.FS('readFile', 'preview.png');
+        const blob = new Blob([data.buffer], { type: 'image/png' });
+        const img = new Image();
+        img.onload = function() {
+          frameCanvas.width = img.width;
+          frameCanvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+          previewArea.style.display = 'block';
+          console.log('Preview frame displayed');
+        };
+        img.src = URL.createObjectURL(blob);
+      } catch(e) {
+        console.error('Error generating preview:', e);
+      }
     }
 
     videoInput.addEventListener('change', async () => {
+      console.log('Video selected:', videoInput.files[0]);
       encodeBtn.disabled = !videoInput.files.length;
       if (videoInput.files.length) {
         await generatePreview(videoInput.files[0]);
