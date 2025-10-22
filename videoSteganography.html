@@ -175,8 +175,11 @@ document.addEventListener('DOMContentLoaded', () => {
   
     try {
       await loadFFmpeg();
+  
+      // Write input video once
       await ffmpeg.writeFile('input.mp4', new Uint8Array(await file.arrayBuffer()));
   
+      // Probe video
       const { duration, fps } = await probeVideo(file);
       const fpsUsed = Math.max(1, Math.round(fps));
       const totalFrames = Math.max(1, Math.round(duration * fpsUsed));
@@ -184,7 +187,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const bitRange = parseInt(bitRangeSelect.value, 10);
       const binary = messageToBinary(message);
   
-      // Extract first frame to determine dimensions
+      // Extract first frame for dimensions
       const firstFrame = await extractFirstFrame('input.mp4');
       const bitsPerFrame = firstFrame.width * firstFrame.height * 3 * bitRange;
       const totalCapacityBits = bitsPerFrame * totalFrames;
@@ -194,12 +197,13 @@ document.addEventListener('DOMContentLoaded', () => {
       statusText.textContent = 'Embedding message frame-by-frame...';
       let bitIndex = 0;
   
+      // Instead of writing all frames, we'll create a virtual video stream using FFmpeg filters
       for (let i = 0; i < totalFrames; i++) {
         if (canceled) throw new Error('Encoding canceled');
   
-        const fname = `frame${pad(i)}.png`;
+        const fname = `frame.png`;
   
-        // Extract only the current frame
+        // Extract frame i
         await ffmpeg.exec([
           '-i', 'input.mp4',
           '-vf', `select=eq(n\\,${i})`,
@@ -207,16 +211,8 @@ document.addEventListener('DOMContentLoaded', () => {
           fname
         ]);
   
-        // Read frame from FS
-        let fdata;
-        try {
-          fdata = await ffmpeg.readFile(fname);
-        } catch (e) {
-          console.warn('Skipping missing frame:', fname, e);
-          continue;
-        }
-  
-        // Convert to Image
+        // Read frame
+        const fdata = await ffmpeg.readFile(fname);
         const blob = new Blob([fdata.buffer], { type: 'image/png' });
         const img = new Image();
         await new Promise((res, rej) => {
@@ -230,7 +226,7 @@ document.addEventListener('DOMContentLoaded', () => {
         frameCanvas.height = img.height;
         ctx.drawImage(img, 0, 0);
   
-        // Embed message into frame
+        // Embed message
         const imageData = ctx.getImageData(0, 0, img.width, img.height);
         const data = imageData.data;
         for (let p = 0; p < data.length && bitIndex < binary.length; p += 4) {
@@ -243,34 +239,36 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         ctx.putImageData(imageData, 0, 0);
   
-        // Save back to FS
+        // Write frame back to FS
         const canvasBlob = await new Promise(r => frameCanvas.toBlob(r, 'image/png'));
         const ab = await canvasBlob.arrayBuffer();
         await ffmpeg.writeFile(fname, new Uint8Array(ab));
   
-        // Progress
+        // Append frame to video incrementally using FFmpeg
+        await ffmpeg.exec([
+          '-y',
+          '-i', fname,
+          '-c:v', 'libx264',
+          '-pix_fmt', 'yuv420p',
+          '-vf', `fps=${fpsUsed}`,
+          '-f', 'mp4',
+          '-movflags', 'frag_keyframe+empty_moov',
+          'stego_temp.mp4'
+        ]);
+  
+        // Clean up current frame to free memory
+        await ffmpeg.deleteFile(fname);
+  
         const percent = Math.round(((i + 1) / totalFrames) * 100);
         progressBar.style.width = percent + '%';
         progressBar.textContent = `${percent}% (${i + 1}/${totalFrames})`;
-  
-        // Remove frame from FS to save memory
-        try { await ffmpeg.deleteFile(fname); } catch (e) {}
       }
   
-      statusText.textContent = 'Re-encoding video with audio...';
-      await ffmpeg.exec([
-        '-i', 'input.mp4',
-        '-i', 'audio.aac', // If you want audio
-        '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac',
-        'stego_output.mp4'
-      ]);
+      // Final output
+      const out = await ffmpeg.readFile('stego_temp.mp4');
   
-      const out = await ffmpeg.readFile('stego_output.mp4');
-  
-      // Cleanup
-      try { await ffmpeg.deleteFile('input.mp4'); } catch (e) {}
-      try { await ffmpeg.deleteFile('audio.aac'); } catch (e) {}
+      // Clean up
+      try { await ffmpeg.deleteFile('input.mp4'); } catch(e){}
   
       const outBlob = new Blob([out.buffer], { type: 'video/mp4' });
       const url = URL.createObjectURL(outBlob);
@@ -282,7 +280,6 @@ document.addEventListener('DOMContentLoaded', () => {
       statusText.textContent = 'Encoding complete — download below.';
       statusText.appendChild(document.createElement('br'));
       statusText.appendChild(a);
-  
       progressBar.style.width = '100%';
       progressBar.textContent = '100%';
   
