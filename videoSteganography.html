@@ -42,20 +42,22 @@
     </div>
   </div>
 
-  <!-- Import ESM version of FFmpeg -->
-  <script type="module">
-    import { createFFmpeg, fetchFile } from './assets/ffmpeg/esm/index.js';
-
+  <!-- Load FFmpeg UMD version -->
+  <script src="./assets/ffmpeg/umd/ffmpeg.js"></script>
+  <script>
     const videoInput = document.getElementById('videoInput');
     const encodeBtn = document.getElementById('encodeBtn');
     const previewArea = document.getElementById('previewArea');
     const frameCanvas = document.getElementById('frameCanvas');
     const ctx = frameCanvas.getContext('2d');
 
+    // Use UMD global FFmpeg
+    const { createFFmpeg, fetchFile } = FFmpeg;
+
     const ffmpeg = createFFmpeg({
       log: true,
       corePath: './assets/ffmpeg/ffmpeg-core.wasm',
-      workerPath: './assets/ffmpeg/esm/worker.js'
+      workerPath: './assets/ffmpeg/esm/worker.js'  // Updated path here
     });
 
     async function loadFFmpeg() {
@@ -73,8 +75,10 @@
     async function generatePreview(file) {
       try {
         await loadFFmpeg();
+        console.log('Writing video file to FFmpeg FS...');
         ffmpeg.FS('writeFile', 'input.mp4', await fetchFile(file));
 
+        console.log('Extracting first frame...');
         await ffmpeg.run('-i', 'input.mp4', '-ss', '00:00:00', '-frames:v', '1', 'preview.png');
 
         const data = ffmpeg.FS('readFile', 'preview.png');
@@ -85,6 +89,7 @@
           frameCanvas.height = img.height;
           ctx.drawImage(img, 0, 0);
           previewArea.style.display = 'block';
+          console.log('Preview frame displayed');
         };
         img.src = URL.createObjectURL(blob);
       } catch(e) {
