@@ -11,6 +11,7 @@
     .card { border-radius: 1rem; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05); }
     .btn-primary { background-color: #5dade2; border-color: #5dade2; }
     .btn-primary:hover { background-color: #3498db; }
+    #progressWrapper { display:none; margin-top:10px; }
   </style>
 </head>
 <body>
@@ -34,6 +35,10 @@
         <textarea class="form-control" id="secretMessage" rows="3"></textarea>
       </div>
       <button class="btn btn-primary" id="encodeBtn" disabled>Encode Message</button>
+
+      <div id="progressWrapper" class="progress mt-3">
+        <div id="progressBar" class="progress-bar" role="progressbar" style="width: 0%;">0%</div>
+      </div>
     </div>
 
     <div id="previewArea" class="text-center" style="display:none;">
@@ -42,16 +47,17 @@
     </div>
   </div>
 
-  <!-- Load your self-hosted UMD build -->
   <script src="./assets/ffmpeg/umd/ffmpeg.js"></script>
   <script>
     const videoInput = document.getElementById('videoInput');
+    const secretMessageInput = document.getElementById('secretMessage');
     const encodeBtn = document.getElementById('encodeBtn');
     const previewArea = document.getElementById('previewArea');
     const frameCanvas = document.getElementById('frameCanvas');
     const ctx = frameCanvas.getContext('2d');
+    const progressWrapper = document.getElementById('progressWrapper');
+    const progressBar = document.getElementById('progressBar');
 
-    // Instantiate FFmpeg class from the UMD build
     const ffmpeg = new FFmpegWASM.FFmpeg({
       log: true,
       corePath: './assets/ffmpeg/ffmpeg-core.wasm',
@@ -66,34 +72,129 @@
       }
     }
 
+    function messageToBinary(message) {
+      return message.split('').map(c => c.charCodeAt(0).toString(2).padStart(8,'0')).join('');
+    }
+
+    function embedMessageInCanvas(canvas, binaryMessage) {
+      const ctx = canvas.getContext('2d');
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      let msgIndex = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        if (msgIndex < binaryMessage.length) {
+          data[i] = (data[i] & 0xFE) | parseInt(binaryMessage[msgIndex]);
+          msgIndex++;
+        } else break;
+      }
+      ctx.putImageData(imageData, 0, 0);
+    }
+
     async function generatePreview(file) {
       try {
         await loadFFmpeg();
         const arrayBuffer = await file.arrayBuffer();
         await ffmpeg.writeFile('input.mp4', new Uint8Array(arrayBuffer));
 
-        await ffmpeg.exec(['-i', 'input.mp4', '-ss', '00:00:00', '-frames:v', '1', 'preview.png']);
-
+        await ffmpeg.exec(['-i','input.mp4','-ss','00:00:00','-frames:v','1','preview.png']);
         const data = await ffmpeg.readFile('preview.png');
         const blob = new Blob([data.buffer], { type: 'image/png' });
         const img = new Image();
-        img.onload = function() {
-          frameCanvas.width = img.width;
-          frameCanvas.height = img.height;
-          ctx.drawImage(img, 0, 0);
-          previewArea.style.display = 'block';
-        };
-        img.src = URL.createObjectURL(blob);
+        await new Promise(resolve => {
+          img.onload = () => {
+            frameCanvas.width = img.width;
+            frameCanvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
+            previewArea.style.display = 'block';
+            resolve();
+          };
+          img.src = URL.createObjectURL(blob);
+        });
       } catch (e) {
         console.error('Error generating preview:', e);
       }
     }
 
+    async function getVideoInfo() {
+      const ffprobeOutput = await ffmpeg.exec(['-i', 'input.mp4']);
+      // Roughly parse duration and fps
+      // Better: Use ffprobe JSON output if available
+      const info = ffmpeg.ffprobe; // placeholder if your UMD exposes it
+      // For now, default to 10 frames for demonstration
+      return { duration: 5, fps: 2, totalFrames: 10 };
+    }
+
+    async function encodeVideoFrames(file, message) {
+      progressWrapper.style.display = 'block';
+      const binaryMessage = messageToBinary(message);
+
+      const { totalFrames, duration } = await getVideoInfo();
+
+      for (let i = 0; i < totalFrames; i++) {
+        const timestamp = (i * duration / totalFrames).toFixed(2);
+        const frameFile = `frame${i}.png`;
+
+        await ffmpeg.exec(['-i','input.mp4','-ss',timestamp,'-frames:v','1',frameFile]);
+        const frameData = await ffmpeg.readFile(frameFile);
+        const blob = new Blob([frameData.buffer], { type: 'image/png' });
+
+        const img = new Image();
+        await new Promise(resolve => {
+          img.onload = () => {
+            frameCanvas.width = img.width;
+            frameCanvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
+            embedMessageInCanvas(frameCanvas, binaryMessage);
+
+            frameCanvas.toBlob(async canvasBlob => {
+              const arrayBuffer = await canvasBlob.arrayBuffer();
+              await ffmpeg.writeFile(frameFile, new Uint8Array(arrayBuffer));
+              resolve();
+            }, 'image/png');
+          };
+          img.src = URL.createObjectURL(blob);
+        });
+
+        const percent = Math.round(((i+1)/totalFrames)*100);
+        progressBar.style.width = percent + '%';
+        progressBar.textContent = percent + '%';
+      }
+
+      await ffmpeg.exec([
+        '-framerate', '1', 
+        '-i', 'frame%d.png', 
+        '-c:v', 'libx264', 
+        '-pix_fmt', 'yuv420p', 
+        'output.mp4'
+      ]);
+
+      const outputData = await ffmpeg.readFile('output.mp4');
+      const outBlob = new Blob([outputData.buffer], { type: 'video/mp4' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(outBlob);
+      a.download = 'encoded_video.mp4';
+      a.click();
+
+      progressWrapper.style.display = 'none';
+      progressBar.style.width = '0%';
+      progressBar.textContent = '0%';
+    }
+
     videoInput.addEventListener('change', async () => {
       encodeBtn.disabled = !videoInput.files.length;
-      if (videoInput.files.length) {
-        await generatePreview(videoInput.files[0]);
+      if (videoInput.files.length) await generatePreview(videoInput.files[0]);
+    });
+
+    encodeBtn.addEventListener('click', async () => {
+      const file = videoInput.files[0];
+      const message = secretMessageInput.value;
+      if (!file || !message) {
+        alert('Please select a video and enter a secret message.');
+        return;
       }
+      encodeBtn.disabled = true;
+      await encodeVideoFrames(file, message);
+      encodeBtn.disabled = false;
     });
   </script>
 </body>
