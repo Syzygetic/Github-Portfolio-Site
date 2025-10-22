@@ -203,6 +203,7 @@
             const ts=(i/fpsUsed).toFixed(3);
             const fname=`frame${pad(i)}.png`;
 
+            // extract frame
             await ffmpeg.exec(['-i','input.mp4','-ss',ts,'-frames:v','1',fname]);
             const fdata=await ffmpeg.readFile(fname);
             const blob=new Blob([fdata.buffer],{type:'image/png'});
@@ -225,14 +226,10 @@
                 }
                 ctx.putImageData(imageData,0,0);
 
-                const canvasBlob = await new Promise(r=>frameCanvas.toBlob(r,'image/png'));
+                const canvasBlob = await new Promise(r => frameCanvas.toBlob(r,'image/png'));
                 const ab = await canvasBlob.arrayBuffer();
-                const CHUNK_SIZE = 1024*1024; // 1MB
-                for(let offset=0; offset<ab.byteLength; offset+=CHUNK_SIZE){
-                  const chunk = new Uint8Array(ab.slice(offset, offset+CHUNK_SIZE));
-                  await ffmpeg.writeFile(fname, chunk, offset===0);
-                }
-                await ffmpeg.deleteFile(fname); // free memory after each frame
+                await ffmpeg.writeFile(fname,new Uint8Array(ab));
+                await ffmpeg.deleteFile(fname); // ← fixed memory leak
                 res();
               };
               img.onerror=rej;
